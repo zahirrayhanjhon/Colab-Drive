@@ -29,8 +29,12 @@ class WanVideoGenerator:
                 import diffusers
                 import accelerate
                 import sentencepiece
-                import torchvision # This will throw RuntimeError if broken
+                import torchvision
+                # Force C++ extension load to catch 'nms' error right now instead of later
+                _ = torchvision.ops.nms
                 from transformers import UMT5EncoderModel
+                # Force transformers lazy-loader to actually load the module
+                _ = UMT5EncoderModel.__name__
                 import imageio
             except Exception as e:
                 print(f"📦 Packages missing or broken ({e}). Fixing now...")
