@@ -30,7 +30,7 @@ class WanVideoGenerator:
                 import accelerate
             except ImportError:
                 print("📦 Required packages not found. Installing now...")
-                os.system("pip install -q -U diffusers transformers accelerate torch imageio[ffmpeg]")
+                os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf")
                 print("✅ Packages installed.")
 
         self.base_dir = Path(drive_folder_path) if is_colab() else Path("./WanVideoGen")
@@ -179,7 +179,7 @@ class WanVideoGenerator:
 def setup_environment():
     """Helper to install necessary packages in Colab."""
     print("📦 Installing required packages...")
-    os.system("pip install -q -U diffusers transformers accelerate torch imageio[ffmpeg]")
+    os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf")
     print("✅ Packages installed. You may need to restart the session if this is the first install.")
 
 if __name__ == "__main__":
