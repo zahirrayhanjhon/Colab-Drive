@@ -28,10 +28,21 @@ class WanVideoGenerator:
             try:
                 import diffusers
                 import accelerate
+                import sentencepiece
+                from transformers import UMT5EncoderModel
             except ImportError:
-                print("📦 Required packages not found. Installing now...")
-                os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf")
-                print("✅ Packages installed.")
+                print("📦 Required packages not found or need upgrading. Installing now...")
+                # Upgrade torch, torchvision, and torchaudio together to prevent 'torchvision::nms' errors
+                os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio")
+                print("\n" + "="*80)
+                print("🚨 CRITICAL SETUP STEP 🚨")
+                print("Packages have been installed/updated, but Colab needs to reload them.")
+                print("You MUST restart the session to avoid 'UMT5EncoderModel' or 'torchvision' errors.")
+                print("👉 Go to the menu bar: Runtime -> Restart session")
+                print("Then, run this cell again.")
+                print("="*80 + "\n")
+                import sys
+                sys.exit(1) # Stop execution here so it doesn't crash with the old packages
 
         self.base_dir = Path(drive_folder_path) if is_colab() else Path("./WanVideoGen")
         self.models_dir = self.base_dir / "models"
@@ -179,8 +190,9 @@ class WanVideoGenerator:
 def setup_environment():
     """Helper to install necessary packages in Colab."""
     print("📦 Installing required packages...")
-    os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf")
-    print("✅ Packages installed. You may need to restart the session if this is the first install.")
+    os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio")
+    print("✅ Packages installed.")
+    print("🚨 You MUST go to Runtime -> Restart session before running the code! 🚨")
 
 if __name__ == "__main__":
     print("💡 Import WanVideoGenerator to use:")
