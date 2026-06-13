@@ -29,9 +29,11 @@ class WanVideoGenerator:
                 import diffusers
                 import accelerate
                 import sentencepiece
+                import torchvision # This will throw RuntimeError if broken
                 from transformers import UMT5EncoderModel
-            except ImportError:
-                print("📦 Required packages not found or need upgrading. Installing now...")
+                import imageio
+            except Exception as e:
+                print(f"📦 Packages missing or broken ({e}). Fixing now...")
                 # Upgrade torch, torchvision, and torchaudio together to prevent 'torchvision::nms' errors
                 os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio")
                 print("\n" + "="*80)
@@ -78,7 +80,8 @@ class WanVideoGenerator:
             self.t2v_pipe = WanPipeline.from_pretrained(
                 model_id, 
                 torch_dtype=torch.bfloat16,
-                cache_dir=str(self.models_dir)  # Explicitly save to Drive
+                cache_dir=str(self.models_dir),  # Explicitly save to Drive
+                resume_download=True             # Failsafe for interrupted downloads
             )
             # Memory optimizations for T4 GPU
             self.t2v_pipe.enable_model_cpu_offload()
@@ -99,7 +102,8 @@ class WanVideoGenerator:
             self.i2v_pipe = WanImageToVideoPipeline.from_pretrained(
                 model_id, 
                 torch_dtype=torch.bfloat16,
-                cache_dir=str(self.models_dir)  # Explicitly save to Drive
+                cache_dir=str(self.models_dir),  # Explicitly save to Drive
+                resume_download=True             # Failsafe for interrupted downloads
             )
             # Memory optimizations for T4 GPU to avoid Out-Of-Memory errors
             self.i2v_pipe.enable_model_cpu_offload()
@@ -119,11 +123,17 @@ class WanVideoGenerator:
         pipe = self._load_t2v_pipeline()
         
         print(f"🎬 Generating video for prompt: '{prompt}'")
-        output = pipe(
-            prompt=prompt,
-            num_frames=num_frames,
-            guidance_scale=guidance_scale,
-        ).frames[0]
+        try:
+            output = pipe(
+                prompt=prompt,
+                num_frames=num_frames,
+                guidance_scale=guidance_scale,
+            ).frames[0]
+        except Exception as e:
+            if "out of memory" in str(e).lower() or "oom" in str(e).lower():
+                print("❌ OUT OF MEMORY ERROR: The Colab T4 GPU ran out of memory.")
+                print("👉 Try reducing the 'num_frames' argument or generating at a lower resolution.")
+            raise e
         
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = f"t2v_{timestamp}.mp4"
@@ -149,12 +159,18 @@ class WanVideoGenerator:
         
         print(f"🎬 Animating image with prompt: '{prompt}'")
         print("⏳ Note: Image-to-Video on T4 GPU takes approx 20-30 mins for 81 frames due to CPU offloading.")
-        output = pipe(
-            image=image,
-            prompt=prompt,
-            num_frames=num_frames,
-            guidance_scale=guidance_scale,
-        ).frames[0]
+        try:
+            output = pipe(
+                image=image,
+                prompt=prompt,
+                num_frames=num_frames,
+                guidance_scale=guidance_scale,
+            ).frames[0]
+        except Exception as e:
+            if "out of memory" in str(e).lower() or "oom" in str(e).lower():
+                print("❌ OUT OF MEMORY ERROR: The Colab T4 GPU ran out of memory.")
+                print("👉 Try reducing the 'num_frames' argument.")
+            raise e
         
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = f"i2v_{timestamp}.mp4"
