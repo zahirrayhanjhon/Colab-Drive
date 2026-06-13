@@ -30,8 +30,9 @@ class WanVideoGenerator:
                 import accelerate
                 import sentencepiece
                 import torchvision
-                # Force C++ extension load to catch 'nms' error right now instead of later
-                _ = torchvision.ops.nms
+                import torch
+                # Force C++ extension load and execution to catch 'nms' error right now
+                _ = torch.ops.torchvision.nms
                 from transformers import UMT5EncoderModel
                 # Force transformers lazy-loader to actually load the module
                 _ = UMT5EncoderModel.__name__
