@@ -22,7 +22,8 @@ class WanVideoGenerator:
     Helper class to run Wan 2.2 Video generation models on Google Colab (T4 compatible).
     Caches models and saves outputs to a specific Google Drive folder to persist data.
     """
-    def __init__(self, drive_folder_path="/content/drive/MyDrive/WanVideoGen"):
+    def __init__(self, drive_folder_path="/content/drive/MyDrive/WanVideoGen", quantization_config=None):
+        self.quantization_config = quantization_config
         # Auto-install dependencies if not found
         if is_colab():
             try:
@@ -37,10 +38,11 @@ class WanVideoGenerator:
                 # Force transformers lazy-loader to actually load the module
                 _ = UMT5EncoderModel.__name__
                 import imageio
+                import bitsandbytes
             except Exception as e:
                 print(f"📦 Packages missing or broken ({e}). Fixing now...")
                 # Upgrade torch, torchvision, and torchaudio together to prevent 'torchvision::nms' errors
-                os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio")
+                os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio bitsandbytes")
                 print("\n" + "="*80)
                 print("🚨 CRITICAL SETUP STEP 🚨")
                 print("Packages have been installed/updated, but Colab needs to reload them.")
@@ -73,6 +75,31 @@ class WanVideoGenerator:
         print(f"📁 Workspace initialized at: {self.base_dir}")
         print("🚀 Ready to generate videos!")
 
+    def free_memory(self):
+        """
+        Frees up VRAM and RAM by explicitly deleting loaded pipelines.
+        Highly recommended before switching between Text-to-Video and Image-to-Video,
+        or if you run into persistent Out Of Memory (OOM) errors.
+        """
+        import torch
+        import gc
+        
+        if self.t2v_pipe is not None:
+            del self.t2v_pipe
+            self.t2v_pipe = None
+            print("🧹 Unloaded Text-to-Video model.")
+            
+        if self.i2v_pipe is not None:
+            del self.i2v_pipe
+            self.i2v_pipe = None
+            print("🧹 Unloaded Image-to-Video model.")
+            
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        print("✨ VRAM cleared successfully!")
+
     def _load_t2v_pipeline(self):
         if self.t2v_pipe is None:
             import torch
@@ -80,19 +107,41 @@ class WanVideoGenerator:
             
             print(f"⏳ Loading Text-to-Video model (Wan2.2-T2V-A14B)...")
             print(f"📥 Checking Drive cache at {self.models_dir}... (Will download if empty)")
-            print("⚠️ WARNING: This is a 14B MoE model. CPU offloading will be enabled for T4 compatibility.")
             model_id = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
-            self.t2v_pipe = WanPipeline.from_pretrained(
-                model_id, 
-                torch_dtype=torch.bfloat16,
-                cache_dir=str(self.models_dir),  # Explicitly save to Drive
-                resume_download=True             # Failsafe for interrupted downloads
-            )
+            
+            kwargs = {
+                "torch_dtype": torch.bfloat16,
+                "cache_dir": str(self.models_dir),
+                "resume_download": True
+            }
+            
+            if self.quantization_config:
+                from diffusers import WanTransformer3DModel
+                print("🧠 Loading Transformer with BitsAndBytes Quantization...")
+                transformer = WanTransformer3DModel.from_pretrained(
+                    model_id,
+                    subfolder="transformer",
+                    quantization_config=self.quantization_config,
+                    **kwargs
+                )
+                self.t2v_pipe = WanPipeline.from_pretrained(
+                    model_id,
+                    transformer=transformer,
+                    **kwargs
+                )
+            else:
+                print("⚠️ WARNING: Loading 14B MoE model in full bf16. CPU offloading will be enabled.")
+                self.t2v_pipe = WanPipeline.from_pretrained(
+                    model_id, 
+                    **kwargs
+                )
+
             # Memory optimizations for T4 GPU
             self.t2v_pipe.enable_model_cpu_offload()
             self.t2v_pipe.vae.enable_tiling()
+            self.t2v_pipe.vae.enable_slicing() # Further reduces VRAM usage during decoding
             
-            print("✅ Text-to-Video model loaded with CPU offloading and VAE tiling!")
+            print("✅ Text-to-Video model loaded successfully!")
         return self.t2v_pipe
 
     def _load_i2v_pipeline(self):
@@ -102,22 +151,44 @@ class WanVideoGenerator:
             
             print(f"⏳ Loading Image-to-Video model (Wan2.2-I2V-A14B)...")
             print(f"📥 Checking Drive cache at {self.models_dir}... (Will download if empty)")
-            print("⚠️ WARNING: This is a 14B MoE model. CPU offloading will be enabled for T4 compatibility.")
             model_id = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
-            self.i2v_pipe = WanImageToVideoPipeline.from_pretrained(
-                model_id, 
-                torch_dtype=torch.bfloat16,
-                cache_dir=str(self.models_dir),  # Explicitly save to Drive
-                resume_download=True             # Failsafe for interrupted downloads
-            )
-            # Memory optimizations for T4 GPU to avoid Out-Of-Memory errors
+            
+            kwargs = {
+                "torch_dtype": torch.bfloat16,
+                "cache_dir": str(self.models_dir),
+                "resume_download": True
+            }
+
+            if self.quantization_config:
+                from diffusers import WanTransformer3DModel
+                print("🧠 Loading Transformer with BitsAndBytes Quantization...")
+                transformer = WanTransformer3DModel.from_pretrained(
+                    model_id,
+                    subfolder="transformer",
+                    quantization_config=self.quantization_config,
+                    **kwargs
+                )
+                self.i2v_pipe = WanImageToVideoPipeline.from_pretrained(
+                    model_id,
+                    transformer=transformer,
+                    **kwargs
+                )
+            else:
+                print("⚠️ WARNING: Loading 14B MoE model in full bf16. CPU offloading will be enabled.")
+                self.i2v_pipe = WanImageToVideoPipeline.from_pretrained(
+                    model_id, 
+                    **kwargs
+                )
+
+            # Memory optimizations for T4 GPU
             self.i2v_pipe.enable_model_cpu_offload()
             self.i2v_pipe.vae.enable_tiling()
+            self.i2v_pipe.vae.enable_slicing() # Further reduces VRAM usage during decoding
             
-            print("✅ Image-to-Video model loaded with CPU offloading and VAE tiling!")
+            print("✅ Image-to-Video model loaded successfully!")
         return self.i2v_pipe
 
-    def generate_text_to_video(self, prompt, num_frames=81, fps=16, guidance_scale=5.0):
+    def generate_text_to_video(self, prompt, num_frames=81, fps=16, guidance_scale=5.0, seed=None, width=None, height=None, negative_prompt=None):
         """
         Generates a video from text using the 14B T2V model.
         Default generates ~5 seconds of video at 16 fps.
@@ -128,16 +199,29 @@ class WanVideoGenerator:
         pipe = self._load_t2v_pipeline()
         
         print(f"🎬 Generating video for prompt: '{prompt}'")
+        
+        kwargs = {
+            "prompt": prompt,
+            "num_frames": num_frames,
+            "guidance_scale": guidance_scale,
+        }
+        
+        if seed is not None:
+            print(f"🎲 Using seed: {seed}")
+            kwargs["generator"] = torch.Generator(device="cpu" if pipe.device.type == "cpu" else "cuda").manual_seed(seed)
+        if width is not None:
+            kwargs["width"] = width
+        if height is not None:
+            kwargs["height"] = height
+        if negative_prompt is not None:
+            kwargs["negative_prompt"] = negative_prompt
+
         try:
-            output = pipe(
-                prompt=prompt,
-                num_frames=num_frames,
-                guidance_scale=guidance_scale,
-            ).frames[0]
+            output = pipe(**kwargs).frames[0]
         except Exception as e:
             if "out of memory" in str(e).lower() or "oom" in str(e).lower():
                 print("❌ OUT OF MEMORY ERROR: The Colab T4 GPU ran out of memory.")
-                print("👉 Try reducing the 'num_frames' argument or generating at a lower resolution.")
+                print("👉 Try reducing the 'num_frames' argument, lowering resolution, or calling 'gen.free_memory()' first.")
             raise e
         
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -150,7 +234,7 @@ class WanVideoGenerator:
         self.display_video(output_path)
         return output_path
 
-    def generate_image_to_video(self, image_path_or_url, prompt, num_frames=81, fps=16, guidance_scale=5.0):
+    def generate_image_to_video(self, image_path_or_url, prompt, num_frames=81, fps=16, guidance_scale=5.0, seed=None, negative_prompt=None):
         """
         Generates a video from an image and text using the 14B I2V model.
         """
@@ -164,17 +248,26 @@ class WanVideoGenerator:
         
         print(f"🎬 Animating image with prompt: '{prompt}'")
         print("⏳ Note: Image-to-Video on T4 GPU takes approx 20-30 mins for 81 frames due to CPU offloading.")
+        
+        kwargs = {
+            "image": image,
+            "prompt": prompt,
+            "num_frames": num_frames,
+            "guidance_scale": guidance_scale,
+        }
+        
+        if seed is not None:
+            print(f"🎲 Using seed: {seed}")
+            kwargs["generator"] = torch.Generator(device="cpu" if pipe.device.type == "cpu" else "cuda").manual_seed(seed)
+        if negative_prompt is not None:
+            kwargs["negative_prompt"] = negative_prompt
+            
         try:
-            output = pipe(
-                image=image,
-                prompt=prompt,
-                num_frames=num_frames,
-                guidance_scale=guidance_scale,
-            ).frames[0]
+            output = pipe(**kwargs).frames[0]
         except Exception as e:
             if "out of memory" in str(e).lower() or "oom" in str(e).lower():
                 print("❌ OUT OF MEMORY ERROR: The Colab T4 GPU ran out of memory.")
-                print("👉 Try reducing the 'num_frames' argument.")
+                print("👉 Try reducing the 'num_frames' argument or calling 'gen.free_memory()' first.")
             raise e
         
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -211,7 +304,7 @@ class WanVideoGenerator:
 def setup_environment():
     """Helper to install necessary packages in Colab."""
     print("📦 Installing required packages...")
-    os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio")
+    os.system("pip install -q -U diffusers transformers accelerate imageio[ffmpeg] sentencepiece protobuf torch torchvision torchaudio bitsandbytes")
     print("✅ Packages installed.")
     print("🚨 You MUST go to Runtime -> Restart session before running the code! 🚨")
 
